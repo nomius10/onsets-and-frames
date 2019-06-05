@@ -13,18 +13,31 @@ from .midi import parse_midi
 
 
 class PianoRollAudioDataset(Dataset):
-    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE):
+    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100):
         self.path = path
         self.groups = groups if groups is not None else self.available_groups()
         self.sequence_length = sequence_length
         self.device = device
         self.random = np.random.RandomState(seed)
 
+        # TODO: make portable
+        size_total = self.getDatasetSize(groups)
+        size_threshold = size_total * percent_real / 100
+        self.size_loaded = 0
+        notifySwitch = True
+
         self.data = []
         print('Loading %d group%s of %s at %s' % (len(groups), 's'[:len(groups)-1], self.__class__.__name__, path))
         for group in groups:
             for input_files in tqdm(self.files(group), desc='Loading group %s' % group):
-                self.data.append(self.load(*input_files))
+                # load real first, then synthetic
+                if self.size_loaded <= size_threshold:
+                    self.data.append(self.load(*input_files, is_synth=False))
+                else:
+                    if notifySwitch:
+                        print("INFO: switched to synthetic data loading")
+                        notifySwitch = False
+                    self.data.append(self.load(*input_files, is_synth=True))
 
     def __getitem__(self, index):
         data = self.data[index]
@@ -69,7 +82,16 @@ class PianoRollAudioDataset(Dataset):
         """return the list of input files (audio_filename, tsv_filename) for this group"""
         raise NotImplementedError
 
-    def load(self, audio_path, tsv_path):
+    def getDatasetSize(self, groups):
+        size = 0
+        for group in groups:
+            for audio_path, tsv_path in tqdm(self.files(group), desc='Estimating dataset size %s' % group):
+                size += os.path.getsize(audio_path)
+        
+        print(f"INFO: dataset is {size / (1024**3)} GB in size")
+        return size
+
+    def load(self, audio_path, tsv_path, is_synth=False):
         """
         load an audio track and the corresponding labels
 
@@ -86,6 +108,11 @@ class PianoRollAudioDataset(Dataset):
             velocity: torch.ByteTensor, shape = [num_steps, midi_bins]
                 a matrix that contains MIDI velocity values at the frame locations
         """
+        self.size_loaded += os.path.getsize(audio_path)
+
+        if is_synth:
+            audio_path = audio_path.replace('.flac', '.synth.flac')
+
         saved_data_path = audio_path.replace('.flac', '.pt').replace('.wav', '.pt')
         if os.path.exists(saved_data_path):
             return torch.load(saved_data_path)
@@ -125,8 +152,8 @@ class PianoRollAudioDataset(Dataset):
 
 class MAESTRO(PianoRollAudioDataset):
 
-    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE):
-        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device)
+    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100):
+        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real)
 
     @classmethod
     def available_groups(cls):
@@ -135,11 +162,20 @@ class MAESTRO(PianoRollAudioDataset):
     def files(self, group):
         if group not in self.available_groups():
             # year-based grouping
-            flacs = sorted(glob(os.path.join(self.path, group, '*.flac')))
+            flacs = glob(os.path.join(self.path, group, '*.flac'))
+            # don't count synthesized piano flacs, or synthesized violin
+            synths = glob(os.path.join(self.path, group, '*.synth.flac'))
+            synths += glob(os.path.join(self.path, group, '*.violin.flac'))
+            flacs = sorted(list(set(flacs) - set(synths)))
+
             if len(flacs) == 0:
                 flacs = sorted(glob(os.path.join(self.path, group, '*.wav')))
 
-            midis = sorted(glob(os.path.join(self.path, group, '*.midi')))
+            midis = glob(os.path.join(self.path, group, '*.midi'))
+            # don't count violin MIDIs
+            synths = glob(os.path.join(self.path, group, '*.violin.midi'))
+            midis = sorted(list(set(midis) - set(synths)))
+
             files = list(zip(flacs, midis))
             if len(files) == 0:
                 raise RuntimeError(f'Group {group} is empty')

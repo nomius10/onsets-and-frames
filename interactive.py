@@ -60,12 +60,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
 
     train_groups, validation_groups = ['train'], ['validation']
 
-    if leave_one_out is not None:
-        all_years = {'2004', '2006', '2008', '2009', '2011', '2013', '2014', '2015', '2017'}
-        train_groups = list(all_years - {str(leave_one_out)})
-        validation_groups = [str(leave_one_out)]
-
-    dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length, percent_real=percent_real)
+    dataset = MAESTRO(groups=['2015'], sequence_length=sequence_length, percent_real=percent_real)
     loader = DataLoader(dataset, batch_size, shuffle=True)
 
     validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length)
@@ -83,6 +78,33 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
     summary(model)
     scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate)
 
+    import code
+    code.interact(local=locals())
+
+    '''
+import os
+from datetime import datetime
+
+import numpy as np
+from sacred import Experiment
+from sacred.commands import print_config
+from sacred.observers import FileStorageObserver
+from tensorboardX import SummaryWriter
+from torch.nn.utils import clip_grad_norm_
+from torch.optim.lr_scheduler import StepLR
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from evaluate import evaluate
+from onsets_and_frames import *
+
+loop = tqdm(range(resume_iteration + 1, iterations + 1))
+loop_gen = zip(loop, cycle(loader))
+
+i, batch = next(loop_gen)
+    '''
+
+    '''
     loop = tqdm(range(resume_iteration + 1, iterations + 1))
     for i, batch in zip(loop, cycle(loader)):
         scheduler.step()
@@ -109,3 +131,4 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         if i % checkpoint_interval == 0:
             torch.save(model, os.path.join(logdir, f'model-{i}.pt'))
             torch.save(optimizer.state_dict(), os.path.join(logdir, 'last-optimizer-state.pt'))
+    '''

@@ -99,8 +99,9 @@ class OnsetsAndFrames(nn.Module):
         frame_label = batch['frame']
         velocity_label = batch['velocity']
 
+        # [:, :-1] ---> drops one sample in order to get 32 pieces from the spectrogram (instead of 33). hacky
         mel = melspectrogram(audio_label.reshape(-1, audio_label.shape[-1])[:, :-1]).transpose(-1, -2)
-        onset_pred, offset_pred, _, frame_pred, velocity_pred = self(mel)
+        onset_pred, offset_pred, _, frame_pred, velocity_pred = self(mel) # i think this calls forward()
 
         predictions = {
             'onset': onset_pred.reshape(*onset_label.shape),

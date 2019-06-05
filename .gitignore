@@ -1,6 +1,8 @@
 __pycache__
+/**/__pycache__
+/**/*.swp
 .ipynb_checkpoints
 .idea
-data
+data/MAESTRO
+data/MAPS
 runs
-
