@@ -23,7 +23,7 @@ def config():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     iterations = 500000
     resume_iteration = None
-    checkpoint_interval = 1000
+    checkpoint_interval = 10000
 
     batch_size = 8
     sequence_length = 327680
@@ -44,7 +44,15 @@ def config():
 
     validation_length = sequence_length
     validation_interval = 500
+
+    # what % of the dataset is normal (the rest being synthetically generated)?
     percent_real = 100
+    # is the audio "poisoned" with violin?
+    is_poisoned = False
+    # should the validation data be synthesized / poisoned?
+    validation_untouched=True
+
+    assert sequence_length != 0 and (sequence_length & (sequence_length - 1) == 0)
 
     ex.observers.append(FileStorageObserver.create(logdir))
 
@@ -52,7 +60,8 @@ def config():
 @ex.automain
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
-          clip_gradient_norm, validation_length, validation_interval, percent_real):
+          clip_gradient_norm, validation_length, validation_interval, percent_real, is_poisoned,
+          validation_untouched):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -65,10 +74,16 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         train_groups = list(all_years - {str(leave_one_out)})
         validation_groups = [str(leave_one_out)]
 
-    dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length, percent_real=percent_real)
+    dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length, percent_real=percent_real, is_poisoned=is_poisoned)
     loader = DataLoader(dataset, batch_size, shuffle=True)
 
-    validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length)
+    validation_dataset = ""
+    if validation_untouched:
+        # validate on original data from MAESTRO
+        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length)
+    else:
+        # apply the same synthesys / violin poisoning parameters as the train dataset
+        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, percent_real=percent_real, is_poisoned=is_poisoned)
 
     if resume_iteration is None:
         model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity).to(device)

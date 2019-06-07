@@ -13,14 +13,13 @@ from .midi import parse_midi
 
 
 class PianoRollAudioDataset(Dataset):
-    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100):
+    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False):
         self.path = path
         self.groups = groups if groups is not None else self.available_groups()
         self.sequence_length = sequence_length
         self.device = device
         self.random = np.random.RandomState(seed)
 
-        # TODO: make portable
         size_total = self.getDatasetSize(groups)
         size_threshold = size_total * percent_real / 100
         self.size_loaded = 0
@@ -32,12 +31,12 @@ class PianoRollAudioDataset(Dataset):
             for input_files in tqdm(self.files(group), desc='Loading group %s' % group):
                 # load real first, then synthetic
                 if self.size_loaded <= size_threshold:
-                    self.data.append(self.load(*input_files, is_synth=False))
+                    self.data.append(self.load(*input_files, is_synth=False, is_poisoned=is_poisoned))
                 else:
                     if notifySwitch:
                         print("INFO: switched to synthetic data loading")
                         notifySwitch = False
-                    self.data.append(self.load(*input_files, is_synth=True))
+                    self.data.append(self.load(*input_files, is_synth=True, is_poisoned=is_poisoned))
 
     def __getitem__(self, index):
         data = self.data[index]
@@ -91,7 +90,7 @@ class PianoRollAudioDataset(Dataset):
         print(f"INFO: dataset is {size / (1024**3)} GB in size")
         return size
 
-    def load(self, audio_path, tsv_path, is_synth=False):
+    def load(self, audio_path, tsv_path, is_synth=False, is_poisoned=False):
         """
         load an audio track and the corresponding labels
 
@@ -108,17 +107,48 @@ class PianoRollAudioDataset(Dataset):
             velocity: torch.ByteTensor, shape = [num_steps, midi_bins]
                 a matrix that contains MIDI velocity values at the frame locations
         """
+        # add to synth measurement counter
         self.size_loaded += os.path.getsize(audio_path)
 
-        if is_synth:
-            audio_path = audio_path.replace('.flac', '.synth.flac')
+        base_path = audio_path
+        saved_data_path = ""
 
-        saved_data_path = audio_path.replace('.flac', '.pt').replace('.wav', '.pt')
+        if is_synth:
+            # work on synthesized melody, not on original
+            audio_path = base_path.replace('.flac', '.synth.flac')
+            assert os.path.exists(audio_path)
+
+            if not is_poisoned:
+                saved_data_path = base_path.replace('.flac', '.synth.pt').replace('.wav', '.synth.pt')
+            else:
+                saved_data_path = base_path.replace('.flac', '.synth.poison.pt').replace('.wav', '.synth.poison.pt')
+        else:
+            if not is_poisoned:
+                saved_data_path = base_path.replace('.flac', '.pt').replace('.wav', '.pt')
+            else:
+                saved_data_path = base_path.replace('.flac', '.poison.pt').replace('.wav', '.poison.pt')
+
+        # compute path for the noise which is from a separate file
+        poison_path = ""
+        if is_poisoned:
+            poison_path = base_path.replace('.flac', '.violin.flac')
+            assert os.path.exists(poison_path)
+
+        # memoize load
         if os.path.exists(saved_data_path):
             return torch.load(saved_data_path)
 
+        # load original / synthesized piano
         audio, sr = soundfile.read(audio_path, dtype='int16')
         assert sr == SAMPLE_RATE
+
+        # add noise if requested
+        if is_poisoned:
+            poison, srp = soundfile.read(poison_path, dtype='int16')
+            assert srp == SAMPLE_RATE
+
+            poison.resize(audio.shape)
+            audio = np.clip(audio + poison, -(2**15), 2**15 - 1)
 
         audio = torch.ShortTensor(audio)
         audio_length = len(audio)
@@ -152,8 +182,8 @@ class PianoRollAudioDataset(Dataset):
 
 class MAESTRO(PianoRollAudioDataset):
 
-    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100):
-        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real)
+    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False):
+        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real, is_poisoned)
 
     @classmethod
     def available_groups(cls):
