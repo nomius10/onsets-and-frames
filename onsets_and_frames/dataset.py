@@ -13,7 +13,7 @@ from .midi import parse_midi
 
 
 class PianoRollAudioDataset(Dataset):
-    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False):
+    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, skip_synth=False):
         self.path = path
         self.groups = groups if groups is not None else self.available_groups()
         self.sequence_length = sequence_length
@@ -36,7 +36,9 @@ class PianoRollAudioDataset(Dataset):
                     if notifySwitch:
                         print("INFO: switched to synthetic data loading")
                         notifySwitch = False
-                    self.data.append(self.load(*input_files, is_synth=True, is_poisoned=is_poisoned))
+                    
+                    if not skip_synth:
+                        self.data.append(self.load(*input_files, is_synth=True, is_poisoned=is_poisoned))
 
     def __getitem__(self, index):
         data = self.data[index]
@@ -54,16 +56,19 @@ class PianoRollAudioDataset(Dataset):
             result['audio'] = data['audio'][begin:end].to(self.device)
             result['label'] = data['label'][step_begin:step_end, :].to(self.device)
             result['velocity'] = data['velocity'][step_begin:step_end, :].to(self.device)
+            result['label_violin'] = data['label_violin'][step_begin:step_end, :].to(self.device)
         else:
             result['audio'] = data['audio'].to(self.device)
             result['label'] = data['label'].to(self.device)
             result['velocity'] = data['velocity'].to(self.device).float()
+            result['label_violin'] = data['label_violin'].to(self.device)
 
         result['audio'] = result['audio'].float().div_(32768.0)
         result['onset'] = (result['label'] == 3).float()
         result['offset'] = (result['label'] == 1).float()
         result['frame'] = (result['label'] > 1).float()
         result['velocity'] = result['velocity'].float().div_(128.0)
+        result['frame_violin'] = (result['label_violin'] > 1).float()
 
         return result
 
@@ -175,15 +180,33 @@ class PianoRollAudioDataset(Dataset):
             label[frame_right:offset_right, f] = 1
             velocity[left:frame_right, f] = vel
 
-        data = dict(path=audio_path, audio=audio, label=label, velocity=velocity)
+        # load violin midi if requested
+        label_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
+        velocity_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
+
+        if is_poisoned:
+            tsv_violin = tsv_path.replace('.tsv', '.violin.tsv')
+            midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
+
+            # record ONLY the activation and velocity. Ignore onset/offset.
+            for onset, offset, note, vel in midi_violin:
+                left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
+                frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
+                frame_right = min(n_steps, frame_right)
+
+                f = int(note) - MIN_MIDI
+                label_violin[left:frame_right, f] = 2
+                velocity_violin[left:frame_right, f] = vel
+
+        data = dict(path=audio_path, audio=audio, label=label, velocity=velocity, label_violin=label_violin, velocity_violin=velocity_violin)
         torch.save(data, saved_data_path)
         return data
 
 
 class MAESTRO(PianoRollAudioDataset):
 
-    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False):
-        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real, is_poisoned)
+    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, skip_synth=False):
+        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real, is_poisoned, skip_synth)
 
     @classmethod
     def available_groups(cls):
@@ -222,6 +245,14 @@ class MAESTRO(PianoRollAudioDataset):
             if not os.path.exists(tsv_filename):
                 midi = parse_midi(midi_path)
                 np.savetxt(tsv_filename, midi, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+
+            # process the violin, if it exists
+            violin_path = midi_path.replace('.midi', '.violin.midi')
+            tsv_violin = midi_path.replace('.midi', '.violin.tsv').replace('.mid', '.violin.tsv')
+            if os.path.exists(violin_path) and not os.path.exists(tsv_violin):
+                violin = parse_midi(violin_path)
+                np.savetxt(tsv_violin, violin, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+
             result.append((audio_path, tsv_filename))
         return result
 

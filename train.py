@@ -49,8 +49,10 @@ def config():
     percent_real = 100
     # is the audio "poisoned" with violin?
     is_poisoned = False
-    # should the validation data be synthesized / poisoned?
+    # should the validation data be poisoned?
     validation_untouched=True
+    # should synthesized piano be loaded? (if percent_real < 100)
+    skip_synth=False
 
     assert sequence_length != 0 and (sequence_length & (sequence_length - 1) == 0)
 
@@ -61,7 +63,7 @@ def config():
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
           clip_gradient_norm, validation_length, validation_interval, percent_real, is_poisoned,
-          validation_untouched):
+          validation_untouched, skip_synth):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -74,7 +76,8 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         train_groups = list(all_years - {str(leave_one_out)})
         validation_groups = [str(leave_one_out)]
 
-    dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length, percent_real=percent_real, is_poisoned=is_poisoned)
+    dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length,
+                        percent_real=percent_real, is_poisoned=is_poisoned, skip_synth=skip_synth)
     loader = DataLoader(dataset, batch_size, shuffle=True)
 
     validation_dataset = ""
@@ -82,11 +85,11 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         # validate on original data from MAESTRO
         validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length)
     else:
-        # apply the same synthesys / violin poisoning parameters as the train dataset
-        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, percent_real=percent_real, is_poisoned=is_poisoned)
+        # apply the same violin poisoning parameters as the train dataset
+        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, is_poisoned=is_poisoned)
 
     if resume_iteration is None:
-        model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity).to(device)
+        model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity, is_poisoned).to(device)
         optimizer = torch.optim.Adam(model.parameters(), learning_rate)
         resume_iteration = 0
     else:
@@ -94,9 +97,14 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         model = torch.load(model_path)
         optimizer = torch.optim.Adam(model.parameters(), learning_rate)
         optimizer.load_state_dict(torch.load(os.path.join(logdir, 'last-optimizer-state.pt')))
+    
+    #import pdb; pdb.set_trace()
 
     summary(model)
-    scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate)
+    if resume_iteration != 0:
+        scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate, last_epoch=resume_iteration)
+    else:
+        scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate)
 
     loop = tqdm(range(resume_iteration + 1, iterations + 1))
     for i, batch in zip(loop, cycle(loader)):
