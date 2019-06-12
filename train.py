@@ -100,10 +100,20 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
     
     #import pdb; pdb.set_trace()
 
-    summary(model)
-    if resume_iteration != 0:
+    #summary(model)
+
+    # TODO: check if these are valid
+    last_lr = optimizer.param_groups[-1]['lr']
+    last_initial_lr = optimizer.param_groups[-1]['initial_lr'] if resume_iteration != 0 else last_lr
+
+    if resume_iteration != 0 and last_initial_lr == learning_rate:
         scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate, last_epoch=resume_iteration)
+        print(f"INFO: using the adjusted learning rate from the last checkpoint {last_lr}")
     else:
+        if (last_initial_lr != learning_rate):
+            print(f"INFO: overriding learning rate from the last checkpoint (crt:{last_lr}, initial:{last_initial_lr}) with {learning_rate}")
+        else:
+            print(f"INFO: using learning rate {learning_rate}")
         scheduler = StepLR(optimizer, step_size=learning_rate_decay_steps, gamma=learning_rate_decay_rate)
 
     loop = tqdm(range(resume_iteration + 1, iterations + 1))

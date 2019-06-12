@@ -102,6 +102,11 @@ class OnsetsAndFrames(nn.Module):
         '''
 
     def run_on_batch(self, batch):
+        # quickfix for the case when a model is loaded from a file, and is_poisoned is not set...
+        # this should not be needed for any new runs, only for old ones
+        if not hasattr(self, 'is_poisoned'):
+            self.is_poisoned = False
+
         audio_label = batch['audio']
         onset_label = batch['onset']
         offset_label = batch['offset']
@@ -142,4 +147,26 @@ class OnsetsAndFrames(nn.Module):
             return denominator
         else:
             return (onset_label * (velocity_label - velocity_pred) ** 2).sum() / denominator
+
+    def transcribe(self, audio):
+        '''
+        Transcribes raw audio, without computing losses
+        '''
+        mel = melspectrogram(audio.reshape(-1, audio.shape[-1])[:, :-1]).transpose(-1, -2)
+        onset_pred, offset_pred, _, frame_pred, velocity_pred, _ = self(mel) # i think this calls forward()
+
+        predictions = {
+            'onset': onset_pred,
+            'offset': offset_pred,
+            'velocity': velocity_pred
+        }
+
+        if not self.is_poisoned:
+            predictions['frame'] = frame_pred
+        else:
+            s1, s2 = torch.split(frame_pred, 88, 2)
+            predictions['frame'] = s1
+            predictions['frame_violin'] = s2
+
+        return predictions, mel
 

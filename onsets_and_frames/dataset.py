@@ -34,7 +34,7 @@ class PianoRollAudioDataset(Dataset):
                     self.data.append(self.load(*input_files, is_synth=False, is_poisoned=is_poisoned))
                 else:
                     if notifySwitch:
-                        print("INFO: switched to synthetic data loading")
+                        print("\nINFO: switched to synthetic data loading")
                         notifySwitch = False
                     
                     if not skip_synth:
@@ -180,23 +180,22 @@ class PianoRollAudioDataset(Dataset):
             label[frame_right:offset_right, f] = 1
             velocity[left:frame_right, f] = vel
 
-        # load violin midi if requested
+        # load violin midi
         label_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
         velocity_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
-        if is_poisoned:
-            tsv_violin = tsv_path.replace('.tsv', '.violin.tsv')
-            midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
+        tsv_violin = tsv_path.replace('.tsv', '.violin.tsv')
+        midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
 
-            # record ONLY the activation and velocity. Ignore onset/offset.
-            for onset, offset, note, vel in midi_violin:
-                left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
-                frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
-                frame_right = min(n_steps, frame_right)
+        # record ONLY the activation and velocity. Ignore onset/offset.
+        for onset, offset, note, vel in midi_violin:
+            left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
+            frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
+            frame_right = min(n_steps, frame_right)
 
-                f = int(note) - MIN_MIDI
-                label_violin[left:frame_right, f] = 2
-                velocity_violin[left:frame_right, f] = vel
+            f = int(note) - MIN_MIDI
+            label_violin[left:frame_right, f] = 2
+            velocity_violin[left:frame_right, f] = vel
 
         data = dict(path=audio_path, audio=audio, label=label, velocity=velocity, label_violin=label_violin, velocity_violin=velocity_violin)
         torch.save(data, saved_data_path)
