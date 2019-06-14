@@ -185,17 +185,18 @@ class PianoRollAudioDataset(Dataset):
         velocity_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
         tsv_violin = tsv_path.replace('.tsv', '.violin.tsv')
-        midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
+        if os.path.exists(tsv_violin):
+            midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
 
-        # record ONLY the activation and velocity. Ignore onset/offset.
-        for onset, offset, note, vel in midi_violin:
-            left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
-            frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
-            frame_right = min(n_steps, frame_right)
+            # record ONLY the activation and velocity. Ignore onset/offset.
+            for onset, offset, note, vel in midi_violin:
+                left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
+                frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
+                frame_right = min(n_steps, frame_right)
 
-            f = int(note) - MIN_MIDI
-            label_violin[left:frame_right, f] = 2
-            velocity_violin[left:frame_right, f] = vel
+                f = int(note) - MIN_MIDI
+                label_violin[left:frame_right, f] = 2
+                velocity_violin[left:frame_right, f] = vel
 
         data = dict(path=audio_path, audio=audio, label=label, velocity=velocity, label_violin=label_violin, velocity_violin=velocity_violin)
         torch.save(data, saved_data_path)

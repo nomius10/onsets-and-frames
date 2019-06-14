@@ -92,14 +92,14 @@ def evaluate(data, model, onset_threshold=0.5, frame_threshold=0.5, save_path=No
 
 def evaluate_file(model_file, dataset, dataset_group, sequence_length, save_path,
                   onset_threshold, frame_threshold, device):
+    model = torch.load(model_file, map_location=device).eval()
+    #summary(model)
+    
     dataset_class = getattr(dataset_module, dataset)
     kwargs = {'sequence_length': sequence_length, 'device': device}
     if dataset_group is not None:
         kwargs['groups'] = [dataset_group]
     dataset = dataset_class(**kwargs)
-
-    model = torch.load(model_file, map_location=device).eval()
-    summary(model)
 
     metrics = evaluate(tqdm(dataset), model, onset_threshold, frame_threshold, save_path)
 
