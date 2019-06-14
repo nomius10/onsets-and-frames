@@ -78,3 +78,10 @@ def save_pianoroll(path, onsets, frames, onset_threshold=0.5, frame_threshold=0.
     image = Image.fromarray(image, 'RGB')
     image = image.resize((image.size[0], image.size[1] * zoom))
     image.save(path)
+
+def save_pianoroll_violin(path, frames, frame_threshold=0.5, zoom=4):
+    frames = (1 - (frames.t() > frame_threshold)).cpu()
+    image = frames.flip(0).mul(255).numpy()
+    image = Image.fromarray(image)
+    image = image.resize((image.size[0], image.size[1] * zoom))
+    image.save(path)

@@ -50,6 +50,29 @@ def extract_notes(onsets, frames, velocity, onset_threshold=0.5, frame_threshold
 
     return np.array(pitches), np.array(intervals), np.array(velocities)
 
+def extract_violin_notes(frames, frame_threshold=0.5):
+    frames = (frames > frame_threshold).cpu()
+    frame_diff = torch.cat([frames[:1, :], frames[1:, :] - frames[:-1, :]], dim=0) == 1
+
+    pitches = []
+    intervals = []
+
+    for nonzero in frame_diff.nonzero():
+        frame = nonzero[0].item()
+        pitch = nonzero[1].item()
+
+        start = end = frame
+
+        while frames[end, pitch].item():
+            end += 1
+            if end == frames.shape[0]:
+                break
+        
+        if end > start:
+            pitches.append(pitch)
+            intervals.append([start, end])
+
+    return np.array(pitches), np.array(intervals)
 
 def notes_to_frames(pitches, intervals, shape):
     """

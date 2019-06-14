@@ -12,11 +12,16 @@ from scipy.stats import hmean
 from tqdm import tqdm
 import soundfile
 from PIL import Image
+from librosa.core import resample
+from mido import MidiFile
 
-from onsets_and_frames.midi import parse_midi
+from onsets_and_frames import *
+from onsets_and_frames.midi import parse_midi, add_track
+from onsets_and_frames.utils import save_pianoroll_violin
+from onsets_and_frames.decoding import extract_violin_notes
+
 import onsets_and_frames.dataset as dataset_module
 import onsets_and_frames.constants
-from onsets_and_frames import *
 
 eps = sys.float_info.epsilon
 
@@ -26,7 +31,11 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     '''
     transcribes a single file.
     '''
-
+    path_base = output_file if output_file is not None else audio_file
+    path_base = ''.join(audio_file.split(".")[:-1]) + ".transcribed"
+    print(f"transcribing audio file {audio_file}")
+    print(f"outputs are saved as {path_base}.*")
+    
     # load model
     assert os.path.exists(model_file), f"ERROR: invalid model file path"
     model = torch.load(model_file, map_location=device)
@@ -37,14 +46,21 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     # load audio
     assert os.path.exists(audio_file), f"ERROR: invalid audio file path"
     audio, sr = soundfile.read(audio_file, dtype='int16')
+    
+    if len(audio.shape) > 1:
+        audio = audio[:,0]
+
+    if sr != SAMPLE_RATE:
+        print(f"resampling original audio... (from SR {sr} to {SAMPLE_RATE})")
+        audio = resample(np.float32(audio), sr, SAMPLE_RATE)
+        audio = np.int16(audio)
+
+    # compute spectogram AND predictions
     audio = torch.ShortTensor(audio)
     audio = audio.to(device)
     audio = audio.float().div_(32768.0)
 
-    import pdb; pdb.set_trace()
-    
-    # compute spectogram and predictions
-    assert sr == SAMPLE_RATE, f"ERROR: sample rate mismatch: got {sr}, expected {SAMPLE_RATE}"
+    print("transcribing...")
     pred, mel = model.transcribe(audio)
 
     # whY?
@@ -52,7 +68,7 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
         value.squeeze_(0).relu_()
 
     # save spectrogram picture
-    mel_path = audio_file + "spec.png"
+    mel_path = path_base + ".spec.png"
     spec = mel.cpu().numpy()
     spec = spec.reshape(-1, 229)
     spec = np.rot90(spec, 1)
@@ -67,10 +83,14 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     img.save(mel_path)
 
     # save onset-offset-activation picture
-    activation_pic_path = audio_file + ".pred.png"
+    activation_pic_path = path_base + ".piano.png"
     save_pianoroll(activation_pic_path, pred['onset'], pred['frame'])
 
-    # save the reference onset-offset-activation picture
+    if model.is_poisoned:
+        activation_violin_path = path_base + ".violin.png"
+        save_pianoroll_violin(activation_violin_path, pred['frame_violin'])
+
+    # if given, save the reference onset-offset-activation picture
     if reference_midi is not None:
         audio_length = len(audio)
         n_keys = MAX_MIDI - MIN_MIDI + 1
@@ -93,11 +113,13 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
             label[frame_right:offset_right, f] = 1
             velocity[left:frame_right, f] = vel
 
-        reference_pic_path = audio_file + ".ref.png"
+        reference_pic_path = path_base + ".piano_ref.png"
         save_pianoroll(reference_pic_path, (label == 3).float(), (label > 1).float() )
 
     # save prediction as MIDI
-    pitches, intervals, velocities = extract_notes(
+    file = MidiFile()
+
+    p_pitches, p_intervals, p_velocities = extract_notes(
         pred['onset'].reshape(-1, MAX_MIDI - MIN_MIDI + 1),
         pred['frame'].reshape(-1, MAX_MIDI - MIN_MIDI + 1),
         pred['velocity'].reshape(-1, MAX_MIDI - MIN_MIDI + 1),
@@ -105,13 +127,23 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     )
 
     scaling = HOP_LENGTH / SAMPLE_RATE
-    pitches   = np.array([midi_to_hz(MIN_MIDI + midi) for midi in pitches])
-    intervals = (intervals * scaling).reshape(-1, 2)
-    
-    if output_file is None:
-        output_file = audio_file + ".midi"
-    save_midi(output_file, pitches, intervals, velocities)
+    p_pitches   = np.array([midi_to_hz(MIN_MIDI + midi) for midi in p_pitches])
+    p_intervals = (p_intervals * scaling).reshape(-1, 2)
 
+    add_track(file, p_pitches, p_intervals, p_velocities)
+
+    if model.is_poisoned:
+        v_pitches, v_intervals = extract_violin_notes(
+            pred['frame_violin'].reshape(-1, MAX_MIDI - MIN_MIDI + 1)
+        )
+
+        v_pitches   = np.array([midi_to_hz(MIN_MIDI + midi) for midi in v_pitches])
+        v_intervals = (v_intervals * scaling).reshape(-1, 2)
+
+        add_track(file, v_pitches, v_intervals, instrument=40)
+    
+    file.save(path_base + ".midi")
+    
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('model_file', type=str)
