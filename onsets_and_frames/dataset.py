@@ -13,7 +13,7 @@ from .midi import parse_midi
 
 
 class PianoRollAudioDataset(Dataset):
-    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, skip_synth=False):
+    def __init__(self, path, groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, percent_synth=0, just_violin=False):
         self.path = path
         self.groups = groups if groups is not None else self.available_groups()
         self.sequence_length = sequence_length
@@ -21,24 +21,31 @@ class PianoRollAudioDataset(Dataset):
         self.random = np.random.RandomState(seed)
 
         size_total = self.getDatasetSize(groups)
-        size_threshold = size_total * percent_real / 100
         self.size_loaded = 0
         notifySwitch = True
+
+        load_real  = lambda : self.data.append(self.load(input_file_paths, is_synth=False, is_poisoned=is_poisoned, just_violin=just_violin))
+        load_synth = lambda : self.data.append(self.load(input_file_paths, is_synth=True,  is_poisoned=is_poisoned, just_violin=just_violin))
+        load_skip  = lambda : None
+        load_func = load_real
 
         self.data = []
         print('Loading %d group%s of %s at %s' % (len(groups), 's'[:len(groups)-1], self.__class__.__name__, path))
         for group in groups:
-            for input_files in tqdm(self.files(group), desc='Loading group %s' % group):
-                # load real first, then synthetic
-                if self.size_loaded <= size_threshold:
-                    self.data.append(self.load(*input_files, is_synth=False, is_poisoned=is_poisoned))
+            for input_file_paths in tqdm(self.files(group), desc='Loading group %s' % group):
+                # load real first, then synthetic, then skip
+                if self.size_loaded <= (size_total * percent_real / 100):
+                    load_func = load_real
+                elif self.size_loaded <= (size_total * (percent_real+percent_synth) / 100):
+                    if load_func != load_synth:
+                        print("\nINFO: switched to loading synthetic audio")
+                    load_func = load_synth
                 else:
-                    if notifySwitch:
-                        print("\nINFO: switched to synthetic data loading")
-                        notifySwitch = False
-                    
-                    if not skip_synth:
-                        self.data.append(self.load(*input_files, is_synth=True, is_poisoned=is_poisoned))
+                    if load_func != load_skip:
+                        print("\nINFO: skipping the rest")
+                    load_func = load_skip
+
+                load_func()
 
     def __getitem__(self, index):
         data = self.data[index]
@@ -87,15 +94,18 @@ class PianoRollAudioDataset(Dataset):
         raise NotImplementedError
 
     def getDatasetSize(self, groups):
+        """estimate the size of a dataset, in MB"""
         size = 0
+        count = 0
         for group in groups:
-            for audio_path, tsv_path in tqdm(self.files(group), desc='Estimating dataset size %s' % group):
-                size += os.path.getsize(audio_path)
+            for input_file_paths in tqdm(self.files(group), desc='Estimating dataset size %s' % group):
+                size += os.path.getsize(input_file_paths['flac_path'])
+                count += 1
         
-        print(f"INFO: dataset is {size / (1024**3)} GB in size")
+        print(f"INFO: dataset {group} is {size / (1024**3)} GB in size, across {count} files")
         return size
 
-    def load(self, audio_path, tsv_path, is_synth=False, is_poisoned=False):
+    def load(self, input_file_paths, is_synth=False, is_poisoned=False, just_violin=False):
         """
         load an audio track and the corresponding labels
 
@@ -113,59 +123,49 @@ class PianoRollAudioDataset(Dataset):
                 a matrix that contains MIDI velocity values at the frame locations
         """
         # add to synth measurement counter
-        self.size_loaded += os.path.getsize(audio_path)
+        self.size_loaded += os.path.getsize(input_file_paths['flac_path'])
 
-        base_path = audio_path
-        saved_data_path = ""
-
-        if is_synth:
-            # work on synthesized melody, not on original
-            audio_path = base_path.replace('.flac', '.synth.flac')
-            assert os.path.exists(audio_path)
-
-            if not is_poisoned:
-                saved_data_path = base_path.replace('.flac', '.synth.pt').replace('.wav', '.synth.pt')
-            else:
-                saved_data_path = base_path.replace('.flac', '.synth.poison.pt').replace('.wav', '.synth.poison.pt')
-        else:
-            if not is_poisoned:
-                saved_data_path = base_path.replace('.flac', '.pt').replace('.wav', '.pt')
-            else:
-                saved_data_path = base_path.replace('.flac', '.poison.pt').replace('.wav', '.poison.pt')
-
-        # compute path for the noise which is from a separate file
-        poison_path = ""
-        if is_poisoned:
-            poison_path = base_path.replace('.flac', '.violin.flac')
-            assert os.path.exists(poison_path)
+        # compute memoize path
+        load_config_nr = (int(is_synth) << 0) + (int(is_poisoned) << 1) + (int(just_violin) << 2)
+        cache_path = input_file_paths['cache_path'].replace('.pt', f'.{load_config_nr}.pt')
 
         # memoize load
-        if os.path.exists(saved_data_path):
-            return torch.load(saved_data_path)
+        if os.path.exists(cache_path):
+            return torch.load(cache_path)
 
-        # load original / synthesized piano
-        audio, sr = soundfile.read(audio_path, dtype='int16')
+        #### LOAD AUDIO
+        piano_audio, sr = soundfile.read(input_file_paths['flac_path'], dtype='int16')
         assert sr == SAMPLE_RATE
+        audio = np.zeros(piano_audio.shape, dtype='int32') # accumulator
 
-        # add noise if requested
-        if is_poisoned:
-            poison, srp = soundfile.read(poison_path, dtype='int16')
-            assert srp == SAMPLE_RATE
+        def load_flac(pathname):
+            audio, sr = soundfile.read(input_file_paths[pathname], dtype='int16')
+            assert sr == SAMPLE_RATE
+            return audio.resize(audio.shape)
 
-            poison.resize(audio.shape)
-            audio = np.clip(audio + poison, -(2**15), 2**15 - 1)
+        # different data load depending on the config
+        if just_violin:
+            audio += load_flac('synth_violin_path')
+        else:
+            if not is_synth:
+                audio += piano_audio
+            else:
+                audio += load_flac('synth_path')
 
+            if is_poisoned:
+                audio += load_flac('synth_violin_path')
+
+        audio = np.int16(np.clip(audio, -(2**15), 2**15 - 1))
         audio = torch.ShortTensor(audio)
         audio_length = len(audio)
 
         n_keys = MAX_MIDI - MIN_MIDI + 1
         n_steps = (audio_length - 1) // HOP_LENGTH + 1
 
-        label = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
+        label    = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
         velocity = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
-        tsv_path = tsv_path
-        midi = np.loadtxt(tsv_path, delimiter='\t', skiprows=1)
+        midi = np.loadtxt(input_file_paths['tsv_path'], delimiter='\t', skiprows=1)
 
         for onset, offset, note, vel in midi:
             left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
@@ -181,12 +181,11 @@ class PianoRollAudioDataset(Dataset):
             velocity[left:frame_right, f] = vel
 
         # load violin midi
-        label_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
+        label_violin    = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
         velocity_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
-        tsv_violin = tsv_path.replace('.tsv', '.violin.tsv')
-        if os.path.exists(tsv_violin):
-            midi_violin = np.loadtxt(tsv_violin, delimiter='\t', skiprows=1)
+        if os.path.exists(input_file_paths['tsv_violin']):
+            midi_violin = np.loadtxt(input_file_paths['tsv_violin'], delimiter='\t', skiprows=1)
 
             # record ONLY the activation and velocity. Ignore onset/offset.
             for onset, offset, note, vel in midi_violin:
@@ -198,15 +197,18 @@ class PianoRollAudioDataset(Dataset):
                 label_violin[left:frame_right, f] = 2
                 velocity_violin[left:frame_right, f] = vel
 
-        data = dict(path=audio_path, audio=audio, label=label, velocity=velocity, label_violin=label_violin, velocity_violin=velocity_violin)
-        torch.save(data, saved_data_path)
+        data = dict(path=input_file_paths['flac_path'], audio=audio, label=label, velocity=velocity,
+                    label_violin=label_violin, velocity_violin=velocity_violin)
+        
+        # memoize save
+        torch.save(data, cache_path)
         return data
 
 
 class MAESTRO(PianoRollAudioDataset):
 
-    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, skip_synth=False):
-        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real, is_poisoned, skip_synth)
+    def __init__(self, path='data/MAESTRO', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, percent_synth=0, just_violin=False):
+        super().__init__(path, groups if groups is not None else ['train'], sequence_length, seed, device, percent_real, is_poisoned, percent_synth, just_violin)
 
     @classmethod
     def available_groups(cls):
@@ -220,9 +222,6 @@ class MAESTRO(PianoRollAudioDataset):
             synths = glob(os.path.join(self.path, group, '*.synth.flac'))
             synths += glob(os.path.join(self.path, group, '*.violin.flac'))
             flacs = sorted(list(set(flacs) - set(synths)))
-
-            if len(flacs) == 0:
-                flacs = sorted(glob(os.path.join(self.path, group, '*.wav')))
 
             midis = glob(os.path.join(self.path, group, '*.midi'))
             # don't count violin MIDIs
@@ -241,25 +240,26 @@ class MAESTRO(PianoRollAudioDataset):
 
         result = []
         for audio_path, midi_path in files:
-            tsv_filename = midi_path.replace('.midi', '.tsv').replace('.mid', '.tsv')
-            if not os.path.exists(tsv_filename):
-                midi = parse_midi(midi_path)
-                np.savetxt(tsv_filename, midi, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+            dic = {'flac_path' : audio_path}
+            dic['synth_path']       = audio_path.replace('.flac', '.synth.flac')
+            dic['synth_violin_path'] = audio_path.replace('.flac', '.violin.flac')
 
-            # process the violin, if it exists
-            violin_path = midi_path.replace('.midi', '.violin.midi')
-            tsv_violin = midi_path.replace('.midi', '.violin.tsv').replace('.mid', '.violin.tsv')
-            if os.path.exists(violin_path) and not os.path.exists(tsv_violin):
-                violin = parse_midi(violin_path)
-                np.savetxt(tsv_violin, violin, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+            dic['midi_path']        = midi_path
+            dic['midi_violin_path'] = audio_path.replace('.flac', '.violin.midi')
 
-            result.append((audio_path, tsv_filename))
+            dic['tsv_path']        = midi_path.replace('.midi', '.tsv')
+            dic['tsv_violin_path'] = midi_path.replace('.midi', '.violin.tsv')
+            
+            dic['cache_path'] = audio_path.replace('.flac', '.pt')
+
+            result.append(dic)
+
         return result
 
 
 class MAPS(PianoRollAudioDataset):
-    def __init__(self, path='data/MAPS', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE):
-        super().__init__(path, groups if groups is not None else ['ENSTDkAm', 'ENSTDkCl'], sequence_length, seed, device)
+    def __init__(self, path='data/MAPS', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, percent_synth=0, just_violin=False):
+        super().__init__(path, groups if groups is not None else ['ENSTDkAm', 'ENSTDkCl'], sequence_length, seed, device, percent_real, is_poisoned, percent_synth, just_violin)
 
     @classmethod
     def available_groups(cls):
@@ -267,9 +267,21 @@ class MAPS(PianoRollAudioDataset):
 
     def files(self, group):
         flacs = glob(os.path.join(self.path, 'flac', '*_%s.flac' % group))
-        tsvs = [f.replace('/flac/', '/tsv/matched/').replace('.flac', '.tsv') for f in flacs]
 
-        assert(all(os.path.isfile(flac) for flac in flacs))
-        assert(all(os.path.isfile(tsv) for tsv in tsvs))
+        results = []
+        for x in sorted(flacs):
+            dic = {'flac_path' : x}
+            dic['synth_path']       = x.replace('/flac/', '/synth/').replace('.flac', '.synth.flac')
+            dic['synth_violin_path'] = x.replace('/flac/', '/flac_violin').replace('.flac', '.violin.flac')
 
-        return sorted(zip(flacs, tsvs))
+            dic['midi_path']        = x.replace('/flac/', '/midi/').replace('.flac', '.mid')
+            dic['midi_violin_path'] = x.replace('/flac/', '/midi_violin/').replace('.flac', '.violin.midi')
+
+            dic['tsv_path']        = x.replace('/flac/', '/tsv/matched/').replace('.flac', '.tsv')
+            dic['tsv_violin_path'] = x.replace('/flac/', '/tsv_violin/').replace('.flac', '.violin.tsv')
+
+            dic['cache_path'] = x.replace('/flac/', '/cache/').replace('.flac', '.pt')
+
+            results.append(dic)
+
+        return results

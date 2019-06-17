@@ -78,7 +78,11 @@ def gen_violin(path):
                         time=current_tick - last_tick))
         last_tick = current_tick
 
-    outpath = path.replace(".midi", ".violin.midi")
+    outpath=""
+    if outpath.endswith(".midi"):
+        outpath = path.replace(".midi", ".violin.midi")
+    else:
+        outpath = path.replace(".mid", ".violin.midi")
     mid_out.save(outpath)
 
 if __name__ == '__main__':

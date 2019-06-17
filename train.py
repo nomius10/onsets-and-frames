@@ -45,14 +45,14 @@ def config():
     validation_length = sequence_length
     validation_interval = 500
 
-    # what % of the dataset is normal (the rest being synthetically generated)?
+    # what % of the dataset is normal?
     percent_real = 100
     # is the audio "poisoned" with violin?
     is_poisoned = False
     # should the validation data be poisoned?
     validation_untouched=True
-    # should synthesized piano be loaded? (if percent_real < 100)
-    skip_synth=False
+    # what % of the dataset is synthesized?
+    percent_synth=0
 
     assert sequence_length != 0 and (sequence_length & (sequence_length - 1) == 0)
 
@@ -63,7 +63,7 @@ def config():
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
           clip_gradient_norm, validation_length, validation_interval, percent_real, is_poisoned,
-          validation_untouched, skip_synth):
+          validation_untouched, percent_synth):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -77,7 +77,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         validation_groups = [str(leave_one_out)]
 
     dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length,
-                        percent_real=percent_real, is_poisoned=is_poisoned, skip_synth=skip_synth)
+                        percent_real=percent_real, is_poisoned=is_poisoned, percent_synth=percent_synth)
     loader = DataLoader(dataset, batch_size, shuffle=True)
 
     validation_dataset = ""
