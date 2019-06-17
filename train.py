@@ -86,7 +86,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length)
     else:
         # apply the same violin poisoning parameters as the train dataset
-        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, is_poisoned=is_poisoned)
+        validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, is_poisoned=is_poisoned, just_violin=just_violin)
 
     if resume_iteration is None:
         model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity, is_poisoned).to(device)

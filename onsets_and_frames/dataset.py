@@ -19,13 +19,15 @@ class PianoRollAudioDataset(Dataset):
         self.sequence_length = sequence_length
         self.device = device
         self.random = np.random.RandomState(seed)
+        self.is_poisoned = is_poisoned
+        self.just_violin = just_violin
 
         size_total = self.getDatasetSize(groups)
         self.size_loaded = 0
         notifySwitch = True
 
-        load_real  = lambda : self.data.append(self.load(input_file_paths, is_synth=False, is_poisoned=is_poisoned, just_violin=just_violin))
-        load_synth = lambda : self.data.append(self.load(input_file_paths, is_synth=True,  is_poisoned=is_poisoned, just_violin=just_violin))
+        load_real  = lambda : self.data.append(self.load(input_file_paths, is_synth=False))
+        load_synth = lambda : self.data.append(self.load(input_file_paths, is_synth=True))
         load_skip  = lambda : None
         load_func = load_real
 
@@ -105,7 +107,7 @@ class PianoRollAudioDataset(Dataset):
         print(f"INFO: dataset {group} is {size / (1024**3)} GB in size, across {count} files")
         return size
 
-    def load(self, input_file_paths, is_synth=False, is_poisoned=False, just_violin=False):
+    def load(self, input_file_paths, is_synth=False):
         """
         load an audio track and the corresponding labels
 
@@ -126,7 +128,9 @@ class PianoRollAudioDataset(Dataset):
         self.size_loaded += os.path.getsize(input_file_paths['flac_path'])
 
         # compute memoize path
-        load_config_nr = (int(is_synth) << 0) + (int(is_poisoned) << 1) + (int(just_violin) << 2)
+        load_config_nr = (int(is_synth) << 0) +             \
+                         (int(self.is_poisoned) << 1) +     \
+                         (int(self.just_violin) << 2)
         cache_path = input_file_paths['cache_path'].replace('.pt', f'.{load_config_nr}.pt')
 
         # memoize load
@@ -139,12 +143,13 @@ class PianoRollAudioDataset(Dataset):
         audio = np.zeros(piano_audio.shape, dtype='int32') # accumulator
 
         def load_flac(pathname):
-            audio, sr = soundfile.read(input_file_paths[pathname], dtype='int16')
+            assert os.path.exists(input_file_paths[pathname])
+            waveform, sr = soundfile.read(input_file_paths[pathname], dtype='int16')
             assert sr == SAMPLE_RATE
-            return audio.resize(audio.shape)
+            return np.resize(waveform, audio.shape).astype('int32')
 
         # different data load depending on the config
-        if just_violin:
+        if self.just_violin:
             audio += load_flac('synth_violin_path')
         else:
             if not is_synth:
@@ -152,40 +157,53 @@ class PianoRollAudioDataset(Dataset):
             else:
                 audio += load_flac('synth_path')
 
-            if is_poisoned:
+            if self.is_poisoned:
                 audio += load_flac('synth_violin_path')
 
         audio = np.int16(np.clip(audio, -(2**15), 2**15 - 1))
         audio = torch.ShortTensor(audio)
         audio_length = len(audio)
 
+        #### PARSE MIDI FILES IF NEEDED
+        if not os.path.exists(input_file_paths['tsv_path']):
+            midi = parse_midi(input_file_paths['midi_path'])
+            np.savetxt(input_file_paths['tsv_path'], midi, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+
+        # process the violin, if it exists
+        if (self.is_poisoned or self.just_violin) and not os.path.exists(input_file_paths['tsv_violin_path']):
+            violin = parse_midi(input_file_paths['midi_violin_path'])
+            np.savetxt(input_file_paths['tsv_violin_path'], violin, fmt='%.6f', delimiter='\t', header='onset,offset,note,velocity')
+
+        #### LOAD LABEL FROM MIDI
         n_keys = MAX_MIDI - MIN_MIDI + 1
         n_steps = (audio_length - 1) // HOP_LENGTH + 1
 
         label    = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
         velocity = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
-        midi = np.loadtxt(input_file_paths['tsv_path'], delimiter='\t', skiprows=1)
+        # load the piano label
+        if not self.just_violin:
+            midi = np.loadtxt(input_file_paths['tsv_path'], delimiter='\t', skiprows=1)
 
-        for onset, offset, note, vel in midi:
-            left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
-            onset_right = min(n_steps, left + HOPS_IN_ONSET)
-            frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
-            frame_right = min(n_steps, frame_right)
-            offset_right = min(n_steps, frame_right + HOPS_IN_OFFSET)
+            for onset, offset, note, vel in midi:
+                left = int(round(onset * SAMPLE_RATE / HOP_LENGTH))
+                onset_right = min(n_steps, left + HOPS_IN_ONSET)
+                frame_right = int(round(offset * SAMPLE_RATE / HOP_LENGTH))
+                frame_right = min(n_steps, frame_right)
+                offset_right = min(n_steps, frame_right + HOPS_IN_OFFSET)
 
-            f = int(note) - MIN_MIDI
-            label[left:onset_right, f] = 3
-            label[onset_right:frame_right, f] = 2
-            label[frame_right:offset_right, f] = 1
-            velocity[left:frame_right, f] = vel
+                f = int(note) - MIN_MIDI
+                label[left:onset_right, f] = 3
+                label[onset_right:frame_right, f] = 2
+                label[frame_right:offset_right, f] = 1
+                velocity[left:frame_right, f] = vel
 
-        # load violin midi
+        # load violin label
         label_violin    = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
         velocity_violin = torch.zeros(n_steps, n_keys, dtype=torch.uint8)
 
-        if os.path.exists(input_file_paths['tsv_violin']):
-            midi_violin = np.loadtxt(input_file_paths['tsv_violin'], delimiter='\t', skiprows=1)
+        if self.is_poisoned or self.just_violin:
+            midi_violin = np.loadtxt(input_file_paths['tsv_violin_path'], delimiter='\t', skiprows=1)
 
             # record ONLY the activation and velocity. Ignore onset/offset.
             for onset, offset, note, vel in midi_violin:
@@ -197,10 +215,10 @@ class PianoRollAudioDataset(Dataset):
                 label_violin[left:frame_right, f] = 2
                 velocity_violin[left:frame_right, f] = vel
 
-        data = dict(path=input_file_paths['flac_path'], audio=audio, label=label, velocity=velocity,
-                    label_violin=label_violin, velocity_violin=velocity_violin)
-        
+        data = dict(path=input_file_paths['flac_path'], audio=audio, label=label, velocity=velocity, label_violin=label_violin, velocity_violin=velocity_violin)
+
         # memoize save
+        #import pdb; pdb.set_trace()
         torch.save(data, cache_path)
         return data
 
