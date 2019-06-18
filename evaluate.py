@@ -107,14 +107,17 @@ def eval_generic(metrics, prefix, fsl, fsr, p_ref, i_ref, v_ref, p_est, i_est, v
     '''
 
 def evaluate_file(model_file, dataset, dataset_group, sequence_length, save_path,
-                  onset_threshold, frame_threshold, device):
+                  onset_threshold, frame_threshold, device, poison, just_violin):
     model = torch.load(model_file, map_location=device).eval()
     #summary(model)
     
     dataset_class = getattr(dataset_module, dataset)
     kwargs = {'sequence_length': sequence_length, 'device': device}
-    if hasattr(model, "is_poisoned"):
-        kwargs['is_poisoned'] = model.is_poisoned
+    if poison:  # overlap violin on demand
+        kwargs['is_poisoned'] = True
+    if just_violin: # load just violin, on demand
+        kwargs['just_violin'] = True
+
     if dataset_group is not None:
         kwargs['groups'] = [dataset_group]
     dataset = dataset_class(**kwargs)
@@ -137,6 +140,8 @@ if __name__ == '__main__':
     parser.add_argument('--onset-threshold', default=0.5, type=float)
     parser.add_argument('--frame-threshold', default=0.5, type=float)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--poison', default=False)
+    parser.add_argument('--just-violin', default=False)
 
     with torch.no_grad():
         evaluate_file(**vars(parser.parse_args()))

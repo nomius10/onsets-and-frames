@@ -289,8 +289,8 @@ class MAPS(PianoRollAudioDataset):
         results = []
         for x in sorted(flacs):
             dic = {'flac_path' : x}
-            dic['synth_path']       = x.replace('/flac/', '/synth/').replace('.flac', '.synth.flac')
-            dic['synth_violin_path'] = x.replace('/flac/', '/flac_violin').replace('.flac', '.violin.flac')
+            dic['synth_path']        = x.replace('/flac/', '/synth/').replace('.flac', '.synth.flac')
+            dic['synth_violin_path'] = x.replace('/flac/', '/flac_violin/').replace('.flac', '.violin.flac')
 
             dic['midi_path']        = x.replace('/flac/', '/midi/').replace('.flac', '.mid')
             dic['midi_violin_path'] = x.replace('/flac/', '/midi_violin/').replace('.flac', '.violin.midi')
