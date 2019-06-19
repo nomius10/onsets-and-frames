@@ -26,14 +26,9 @@ def config():
     checkpoint_interval = 10000
 
     batch_size = 8
-    sequence_length = 327680
+    sequence_length = 2**16 #327680 = 2**16*5
     model_complexity = 48
-    '''
-    if torch.cuda.is_available() and torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory < 10e9:
-        batch_size //= 2
-        sequence_length //= 2
-        print(f'Reducing batch size to {batch_size} and sequence_length to {sequence_length} to save memory')
-    '''
+    
     learning_rate = 0.0006
     learning_rate_decay_steps = 10000
     learning_rate_decay_rate = 0.98
@@ -53,6 +48,8 @@ def config():
     validation_untouched=True
     # what % of the dataset is synthesized?
     percent_synth=0
+    # add a separate stack for violin with a bigger kernel?
+    add_violin_stack=False
 
     assert sequence_length != 0 and (sequence_length & (sequence_length - 1) == 0)
 
@@ -63,7 +60,7 @@ def config():
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
           clip_gradient_norm, validation_length, validation_interval, percent_real, is_poisoned,
-          validation_untouched, percent_synth):
+          validation_untouched, percent_synth, add_violin_stack):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -89,7 +86,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         validation_dataset = MAESTRO(groups=validation_groups, sequence_length=validation_length, is_poisoned=is_poisoned, just_violin=just_violin)
 
     if resume_iteration is None:
-        model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity, is_poisoned).to(device)
+        model = OnsetsAndFrames(N_MELS, MAX_MIDI - MIN_MIDI + 1, model_complexity, is_poisoned, add_violin_stack).to(device)
         optimizer = torch.optim.Adam(model.parameters(), learning_rate)
         resume_iteration = 0
     else:
@@ -100,7 +97,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
     
     #import pdb; pdb.set_trace()
 
-    #summary(model)
+    summary(model)
 
     # TODO: check if these are valid
     last_lr = optimizer.param_groups[-1]['lr']
