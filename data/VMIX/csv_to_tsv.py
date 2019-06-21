@@ -42,11 +42,11 @@ def parse_instrument(file, instrument, prefix, is_ok):
         intervals = []
         pitches = []
         velocities = []
-
+        
         for line in f:
             el = line.split(",")
 
-            if not is_ok(el[3]):
+            if not is_ok(el[2]):
                 continue
 
             start = int(el[0])/44100
@@ -58,13 +58,14 @@ def parse_instrument(file, instrument, prefix, is_ok):
 
         if intervals:
             with open(file.replace(".csv", f"{prefix}.tsv"), "w") as g:
-                for p, i, v in zip(intervals, pitches, velocities):
-                    g.write(f"{i[0]},{i[1]},{p},{v}\n")
+                g.write("# onset,offset,note,velocity\n")
+                for i, p, v in zip(intervals, pitches, velocities):
+                    g.write(f"{i[0]}\t{i[1]}\t{p}\t{v}\n")
 
-            save_midi(file.replace(".csv", f"{prefix}.midi"), pitches, intervals, velocities, instrument=0)
+            save_midi(file.replace(".csv", f"{prefix}.midi"), pitches, intervals, velocities, instrument)
 
-is_just_piano = lambda x : x == 0
-is_some_violin = lambda x : x != 0
+is_just_piano = lambda x : x == "1"
+is_some_violin = lambda x : x != "1"
  
 for file in tqdm(sys.argv[1:]):
     parse_instrument(file, 0, "", is_just_piano)

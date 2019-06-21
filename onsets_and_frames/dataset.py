@@ -303,3 +303,45 @@ class MAPS(PianoRollAudioDataset):
             results.append(dic)
 
         return results
+
+class VMIX(PianoRollAudioDataset):
+    def __init__(self, path='data/VMIX', groups=None, sequence_length=None, seed=42, device=DEFAULT_DEVICE, percent_real=100, is_poisoned=False, percent_synth=0, just_violin=False):
+        self.quickfix = True if just_violin else False  # TODO: refactor
+
+        super().__init__(path, groups if groups is not None else self.available_groups(), sequence_length, seed, device, 100, False, 0, True)
+    
+    @classmethod
+    def available_groups(cls):
+        return ['violin', 'piano_violin']
+
+    def files(self, group):
+        flacs = glob(os.path.join(self.path, group, '*.flac'))
+
+        if len(flacs) == 0:
+            raise RuntimeError(f'Group {group} is empty')
+
+        result = []
+        for audio_path in flacs:
+            dic = {}
+            dic['flac_path']         = audio_path
+            dic['synth_path']        = audio_path.replace('.flac', '.synth.flac')
+            dic['synth_violin_path'] = audio_path   # not actually synthesized here. TODO: refactor...
+
+            if self.quickfix:
+                # this is so unorthodox
+                dic['midi_path'] = dic['midi_violin_path'] = audio_path.replace('.flac', '.violin.midi')
+            else:
+                dic['midi_path']        = audio_path.replace('.flac', '.midi')
+                dic['midi_violin_path'] = audio_path.replace('.flac', '.violin.midi')
+
+            if self.quickfix:
+                dic['tsv_path'] = dic['tsv_violin_path'] = audio_path.replace('.flac', '.violin.tsv')
+            else:
+                dic['tsv_path']        = audio_path.replace('.flac', '.tsv')
+                dic['tsv_violin_path'] = audio_path.replace('.flac', '.violin.tsv')
+            
+            dic['cache_path'] = audio_path.replace('.flac', '.pt')
+
+            result.append(dic)
+
+        return result
