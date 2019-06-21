@@ -1,6 +1,7 @@
 __pycache__
 /**/__pycache__
 /**/*.swp
+/**/*.pt
 .ipynb_checkpoints
 .idea
 data/MAESTRO

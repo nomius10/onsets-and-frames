@@ -8,13 +8,14 @@ from mido import Message, MidiFile, MidiTrack
 from mir_eval.util import hz_to_midi
 from tqdm import tqdm
 import random
+import math
 
 MIN_MIDI = 21
 MAX_MIDI = 108
 
-V_MAX_NOTELEN = 2
-V_MIN_NOTELEN = 0.5
-V_PROB = 80
+V_MAX_NOTELEN = 1
+V_MIN_NOTELEN = 0.1
+V_PROB = 90
 V_SEED = 42
 
 def gen_violin(path):
@@ -30,7 +31,7 @@ def gen_violin(path):
     mid_out.tracks.append(track)
 
     # change to violin
-    track.append(Message('program_change', program=40, time=0))
+    track.append(Message('program_change', program=24, time=0))
 
     events = []
     crt_time = 0
@@ -39,7 +40,7 @@ def gen_violin(path):
     
     # generate notes, one after another
     while crt_time < melody_length:
-        length = random.uniform(V_MIN_NOTELEN, V_MAX_NOTELEN)
+        length = np.clip((math.log(random.uniform(0.1, 2.5), 0.01) + 0.2)*V_MAX_NOTELEN, V_MIN_NOTELEN, V_MAX_NOTELEN)
         if length + crt_time >= melody_length:
             length = melody_length - crt_time
         
@@ -64,6 +65,37 @@ def gen_violin(path):
             crt_time += length
         
         last_len = length
+
+    crt_time = 0
+    last_len = 9000
+    # generate notes, one after another
+    while crt_time < melody_length:
+        length = np.clip((math.log(random.uniform(0.1, 2.5), 0.01) + 0.2)*V_MAX_NOTELEN, V_MIN_NOTELEN, V_MAX_NOTELEN)
+        if length + crt_time >= melody_length:
+            length = melody_length - crt_time
+        
+        end_time = 0
+        # create V_PROB% notes
+        if random.uniform(0,100) < V_PROB:
+            pitch = 0
+            while not(pitch > MIN_MIDI and pitch < MAX_MIDI):
+                pitch = int(random.gauss((MAX_MIDI + MIN_MIDI) / 2, (MAX_MIDI + MIN_MIDI) / 6))
+            velocity = random.randint(60, 127)
+
+            # some overlap
+            max_offset = min(last_len / 2, length / 2)
+            start_time = max(crt_time + random.uniform(-max_offset, max_offset), 0)
+            end_time = start_time + length
+
+            events.append(dict(type='on' , pitch=pitch, time=start_time, velocity=velocity))
+            events.append(dict(type='off', pitch=pitch, time=end_time  , velocity=velocity))
+        
+            crt_time = end_time
+        else:
+            crt_time += length
+        
+        last_len = length
+
 
     events.sort(key=lambda row: row['time'])
 
