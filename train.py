@@ -50,6 +50,8 @@ def config():
     percent_synth=0
     # add a separate stack for violin with a bigger kernel?
     add_violin_stack=False
+    # train only on violin?
+    just_violin=False
 
     assert sequence_length != 0 and (sequence_length & (sequence_length - 1) == 0)
 
@@ -60,7 +62,7 @@ def config():
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
           clip_gradient_norm, validation_length, validation_interval, percent_real, is_poisoned,
-          validation_untouched, percent_synth, add_violin_stack):
+          validation_untouched, percent_synth, add_violin_stack, just_violin):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -74,7 +76,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, bat
         validation_groups = [str(leave_one_out)]
 
     dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length,
-                        percent_real=percent_real, is_poisoned=is_poisoned, percent_synth=percent_synth)
+                        percent_real=percent_real, is_poisoned=is_poisoned, percent_synth=percent_synth, just_violin=just_violin)
     loader = DataLoader(dataset, batch_size, shuffle=True)
 
     validation_dataset = ""
