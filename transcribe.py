@@ -27,7 +27,7 @@ eps = sys.float_info.epsilon
 
 def transcribe_file(model_file, audio_file, output_file, sequence_length,
                     onset_threshold, frame_threshold, device,
-                    save_spectogram, reference_midi):
+                    save_spectogram, reference_midi, save_pr):
     '''
     transcribes a single file.
     '''
@@ -41,6 +41,8 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     model = torch.load(model_file, map_location=device)
     if not hasattr(model, 'is_poisoned'):
         model.is_poisoned = False
+    if not hasattr(model, 'add_violin_stack'):
+        model.add_violin_stack = False
     model.eval()
 
     # load audio
@@ -68,30 +70,32 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
         value.squeeze_(0).relu_()
 
     # save spectrogram picture
-    mel_path = path_base + ".spec.png"
-    spec = mel.cpu().numpy()
-    spec = spec.reshape(-1, 229)
-    spec = np.rot90(spec, 1)
+    if save_spectogram:
+        mel_path = path_base + ".spec.png"
+        spec = mel.cpu().numpy()
+        spec = spec.reshape(-1, 229)
+        spec = np.rot90(spec, 1)
 
-    minval = min(spec.reshape(-1))
-    spec  += abs(minval) if minval < 0 else -minval
-    maxval = max(spec.reshape(-1))
-    spec  *= 255/(maxval)
+        minval = min(spec.reshape(-1))
+        spec  += abs(minval) if minval < 0 else -minval
+        maxval = max(spec.reshape(-1))
+        spec  *= 255/(maxval)
 
-    spec = np.uint8(spec)
-    img = Image.fromarray(spec)
-    img.save(mel_path)
+        spec = np.uint8(spec)
+        img = Image.fromarray(spec)
+        img.save(mel_path)
 
     # save onset-offset-activation picture
-    activation_pic_path = path_base + ".piano.png"
-    save_pianoroll(activation_pic_path, pred['onset'], pred['frame'])
+    if save_pr:
+        activation_pic_path = path_base + ".piano.png"
+        save_pianoroll(activation_pic_path, pred['onset'], pred['frame'])
 
-    if model.is_poisoned:
-        activation_violin_path = path_base + ".violin.png"
-        save_pianoroll_violin(activation_violin_path, pred['frame_violin'])
+        if model.is_poisoned:
+            activation_violin_path = path_base + ".violin.png"
+            save_pianoroll_violin(activation_violin_path, pred['frame_violin'])
 
     # if given, save the reference onset-offset-activation picture
-    if reference_midi is not None:
+    if reference_midi is not None and save_pr:
         audio_length = len(audio)
         n_keys = MAX_MIDI - MIN_MIDI + 1
         n_steps = (audio_length - 1) // HOP_LENGTH + 1
@@ -130,7 +134,7 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
     p_pitches   = np.array([midi_to_hz(MIN_MIDI + midi) for midi in p_pitches])
     p_intervals = (p_intervals * scaling).reshape(-1, 2)
 
-    add_track(file, p_pitches, p_intervals, p_velocities)
+    add_track(file, p_pitches, p_intervals, p_velocities, instrument=0)
 
     if model.is_poisoned:
         v_pitches, v_intervals = extract_violin_notes(
@@ -140,7 +144,7 @@ def transcribe_file(model_file, audio_file, output_file, sequence_length,
         v_pitches   = np.array([midi_to_hz(MIN_MIDI + midi) for midi in v_pitches])
         v_intervals = (v_intervals * scaling).reshape(-1, 2)
 
-        add_track(file, v_pitches, v_intervals, instrument=40)
+        add_track(file, v_pitches, v_intervals, instrument=40, time=60)
     
     file.save(path_base + ".midi")
     
@@ -154,8 +158,9 @@ if __name__ == '__main__':
     parser.add_argument('--frame-threshold', default=0.5, type=float)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
 #    parser.add_argument('--is-poisoned', default=False)
-    parser.add_argument('--save-spectogram', default=True)
+    parser.add_argument('--save-spectogram', default=False)
     parser.add_argument('--reference-midi', default=None)
+    parser.add_argument('--save_pr', default=False)
 
     with torch.no_grad():
         transcribe_file(**vars(parser.parse_args()))

@@ -83,19 +83,20 @@ def save_midi(path, pitches, intervals, velocities):
 
     file.save(path)
 
-def add_track(midifile, pitches, intervals, velocities=None, instrument=0):
+def add_track(midifile, pitches, intervals, velocities=None, instrument=0, time=0):
     '''
     returns a MIDI track.
     instrument is by default 0 (piano). For violin use 40.
     '''
     track = MidiTrack()
-    track.append(Message('program_change', program=instrument, time=0))
+    channel = 1 if instrument == 40 else 0
+    track.append(Message('program_change', channel=channel, program=instrument, time=time))
     ticks_per_second = midifile.ticks_per_beat * 2
 
     events = []
     for i in range(len(pitches)):
-        events.append(dict(type='on', pitch=pitches[i], time=intervals[i][0], velocity=velocities[i] if velocities is not None else 127))
-        events.append(dict(type='off', pitch=pitches[i], time=intervals[i][1], velocity=velocities[i] if velocities is not None else 127))
+        events.append(dict(type='on', pitch=pitches[i], time=intervals[i][0], velocity=velocities[i] if velocities is not None else 1))
+        events.append(dict(type='off', pitch=pitches[i], time=intervals[i][1], velocity=velocities[i] if velocities is not None else 1))
     events.sort(key=lambda row: row['time'])
 
     last_tick = 0
@@ -105,7 +106,7 @@ def add_track(midifile, pitches, intervals, velocities=None, instrument=0):
         if velocity > 127:
             velocity = 127
         pitch = int(round(hz_to_midi(event['pitch'])))
-        track.append(Message('note_' + event['type'], note=pitch, velocity=velocity, time=current_tick - last_tick))
+        track.append(Message('note_' + event['type'], note=pitch, velocity=velocity, time=current_tick - last_tick, channel=channel))
         last_tick = current_tick
 
     midifile.tracks.append(track)
